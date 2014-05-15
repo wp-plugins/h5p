@@ -1,0 +1,37 @@
+#toplevel_page_h5p .wp-menu-image:before {
+  font-family: H5P !important;
+  content: "\e667";
+  padding: 7px 0;
+}
+.h5peditor-form a {
+  text-decoration: none;
+}
+.h5p-wp-admin-wrapper {
+  max-width: 960px;
+}
+#h5p-content-form {
+  padding-top: 10px;
+  margin-right: 300px;
+}
+#h5p-content-form .postbox {
+  float: right;
+  margin-right: -300px;
+  width: 280px;
+}
+#h5p-content-form #minor-publishing {
+  line-height: 175%;
+  padding: 12px;
+}
+#h5p-content-form .submitbox {
+  line-height: 30px;
+  overflow: hidden;
+}
+#h5p-content-form .button-primary {
+  float: right;
+}
+#h5p-content-form label {
+  display: block;
+}
+.h5p-updated-at, .h5p-created-at, .h5p-edit-link {
+  width: 10em;
+}
