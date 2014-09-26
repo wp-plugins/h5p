@@ -12,6 +12,10 @@
 /**
  * Plugin class.
  *
+ * TODO: Add embed
+ * TODO: Test with PostgreSQL
+ * TODO: Check i18n
+ *
  * @package H5P_Plugin
  * @author Joubel <contact@joubel.com>
  */
@@ -24,7 +28,7 @@ class H5P_Plugin {
    * @since 1.0.0
    * @var string
    */
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
 
   /**
    * The Unique identifier for this plugin.
@@ -41,7 +45,7 @@ class H5P_Plugin {
    * @var \H5P_Plugin
    */
   protected static $instance = null;
-  
+
   /**
    * Instance of H5P WordPress Framework Interface.
    *
@@ -49,7 +53,7 @@ class H5P_Plugin {
    * @var \H5PWordPress
    */
   protected static $interface = null;
-  
+
   /**
    * Instance of H5P Core.
    *
@@ -57,10 +61,10 @@ class H5P_Plugin {
    * @var \H5PCore
    */
   protected static $core = null;
-  
+
   /**
    * JavaScript settings to add for H5Ps.
-   * 
+   *
    * @since 1.0.0
    * @var array
    */
@@ -81,12 +85,15 @@ class H5P_Plugin {
 
     // Add support for h5p shortcodes.
     add_shortcode('h5p', array($this, 'shortcode'));
-    
+
     // Adds JavaScript settings to the bottom of the page.
     add_action('wp_footer', array($this, 'add_settings'));
-    
+
     // Clean up tmp editor files
     add_action('h5p_daily_cleanup', array($this, 'remove_old_tmp_files'));
+
+    // Check for updates
+    add_action('plugins_loaded', array($this, 'check_for_updates'), 1);
   }
 
   /**
@@ -116,16 +123,32 @@ class H5P_Plugin {
 
   /**
    * Fired when the plugin is activated.
-   * 
+   *
    * @since 1.0.0
    * @global \wpdb $wpdb
    * @param boolean $network_wide
    */
   public static function activate($network_wide) {
+    self::update_database();
+
+    // Keep track of which DB we have.
+    add_option('h5p_version', self::VERSION);
+
+    // Cleaning rutine
+    wp_schedule_event(time(), 'daily', 'h5p_daily_cleanup');
+  }
+
+  /**
+   * Makes sure the database is up to date.
+   *
+   * @since 1.1.0
+   * @global \wpdb $wpdb
+   */
+  public static function update_database() {
     global $wpdb;
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-    
+
     // Keep track of h5p content entities
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_contents (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -135,6 +158,7 @@ class H5P_Plugin {
       title VARCHAR(255) NOT NULL,
       library_id INT UNSIGNED NOT NULL,
       parameters LONGTEXT NOT NULL,
+      filtered LONGTEXT NOT NULL,
       embed_type VARCHAR(127) NOT NULL,
       content_type VARCHAR(127) NULL,
       author VARCHAR(127) NULL,
@@ -152,7 +176,7 @@ class H5P_Plugin {
       drop_css TINYINT UNSIGNED NOT NULL,
       UNIQUE KEY  (content_id, library_id, dependency_type)
     );");
-    
+
     // Keep track of h5p libraries
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_libraries (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -172,7 +196,7 @@ class H5P_Plugin {
       semantics TEXT NOT NULL,
       UNIQUE KEY  (id)
     );");
-    
+
     // Keep track of h5p library dependencies
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_libraries_libraries (
       library_id INT UNSIGNED NOT NULL,
@@ -180,7 +204,7 @@ class H5P_Plugin {
       dependency_type VARCHAR(255) NOT NULL,
       UNIQUE KEY  (library_id, required_library_id)
     );");
-    
+
     // Keep track of h5p library translations
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_libraries_languages (
       library_id INT UNSIGNED NOT NULL,
@@ -188,20 +212,44 @@ class H5P_Plugin {
       translation TEXT NOT NULL,
       UNIQUE KEY  (library_id, language_code)
     );");
-    
-    // Keep track of which DB we have.
-    add_option('h5p_version', self::VERSION);
-    
-    // Cleaning rutine
-    wp_schedule_event(time(), 'daily', 'h5p_daily_cleanup');
+
+    // Add new capabilities
+    $administrator = get_role('administrator');
+    $administrator->add_cap('manage_h5p_libraries');
+    $administrator->add_cap('edit_h5p_contents');
+    $administrator->add_cap('edit_others_h5p_contents');
+
+    $editor = get_role('editor');
+    $editor->add_cap('edit_h5p_contents');
+    $editor->add_cap('edit_others_h5p_contents');
+
+    $author = get_role('author');
+    $author->add_cap('edit_h5p_contents');
+
+    $contributor = get_role('contributor');
+    $contributor->add_cap('edit_h5p_contents');
+
+    // Add default setting options
+    add_option('h5p_export', TRUE);
+    add_option('h5p_icon', TRUE);
   }
-  
+
   /**
    * @since 1.0.0
    */
   public static function deactivate() {
     // Remove cleaning rutine
     wp_clear_scheduled_hook('h5p_daily_cleanup');
+  }
+
+  /**
+   * @since 1.1.0
+   */
+  public function check_for_updates() {
+    if (get_option('h5p_version') !== self::VERSION) {
+      self::update_database();
+      update_option('h5p_version', self::VERSION);
+    }
   }
 
   /**
@@ -225,10 +273,10 @@ class H5P_Plugin {
   public function enqueue_styles_and_scripts() {
     wp_enqueue_style($this->plugin_slug . '-plugin-styles', plugins_url('h5p/h5p-php-library/styles/h5p.css'), array(), self::VERSION);
   }
- 
+
   /**
    * Get the path to the H5P files folder.
-   * 
+   *
    * @since 1.0.0
    * @return string
    */
@@ -236,10 +284,10 @@ class H5P_Plugin {
     $upload_dir = wp_upload_dir();
     return $upload_dir['basedir'] . '/h5p';
   }
-  
+
   /**
    * Get the URL for the H5P files folder.
-   * 
+   *
    * @since 1.0.0
    * @return string
    */
@@ -247,23 +295,30 @@ class H5P_Plugin {
     $upload_dir = wp_upload_dir();
     return $upload_dir['baseurl'] . '/h5p';
   }
-  
+
   /**
    * Get H5P language code from WordPress.
-   * 
+   *
    * @since 1.0.0
    * @return string
    */
   public function get_language() {
-    if (WPLANG !== '') {
-      $languageParts = explode('_', WPLANG);
+    if (defined('WPLANG')) {
+      $language = WPLANG;
+    }
+    else {
+      $language = get_option('WPLANG');
+    }
+
+    if ($language !== '') {
+      $languageParts = explode('_', $language);
       return $languageParts[0];
     }
-    
+
     return 'en';
   }
-  
-  /** 
+
+  /**
    * Get the different instances of the core.
    *
    * @since 1.0.0
@@ -276,12 +331,12 @@ class H5P_Plugin {
       include_once($path . '../h5p-php-library/h5p.classes.php');
       include_once($path . '../h5p-php-library/h5p-development.class.php');
       include_once($path . 'class-h5p-wordpress.php');
-      
+
       self::$interface = new H5PWordPress();
-      
+
       $language = $this->get_language();
-      
-      self::$core = new H5PCore(self::$interface, $this->get_h5p_url(), $language); 
+
+      self::$core = new H5PCore(self::$interface, $this->get_h5p_url(), $language, get_option('h5p_export', TRUE));
     }
 
     switch ($type) {
@@ -299,10 +354,10 @@ class H5P_Plugin {
         return self::$core;
     }
   }
-  
+
   /**
    * Get content with given id.
-   * 
+   *
    * @since 1.0.0
    * @param int $id
    * @return array
@@ -312,7 +367,7 @@ class H5P_Plugin {
     if ($id === FALSE || $id === NULL) {
       return __('Missing H5P identifier.', $this->plugin_slug);
     }
-    
+
     // Try to find content with $id.
     $core = $this->get_h5p_instance('core');
     $content = $core->loadContent($id);
@@ -320,14 +375,14 @@ class H5P_Plugin {
     if (!$content) {
       return sprintf(__('Cannot find H5P content with id: %d.', $this->plugin_slug), $id);
     }
-    
+
     $content['language'] = $this->get_language();
     return $content;
   }
-  
+
   /**
    * Translate h5p shortcode to html.
-   * 
+   *
    * @since 1.0.0
    * @param array $atts
    * @return string
@@ -336,15 +391,16 @@ class H5P_Plugin {
     $id = isset($atts['id']) ? intval($atts['id']) : NULL;
     $content = $this->get_content($id);
     if (is_string($content)) {
-      return current_user_can('manage_options') ? $content : NULL;
+      // Return error message if the user has the correct cap
+      return current_user_can('edit_h5p_contents') ? $content : NULL;
     }
-    
+
     return $this->add_assets($content);
   }
-  
+
   /**
    * Include settings and assets for the given content.
-   * 
+   *
    * @since 1.0.0
    * @param array $content
    * @param boolean $no_cache
@@ -353,35 +409,27 @@ class H5P_Plugin {
   public function add_assets($content, $no_cache = FALSE) {
     // Add core assets
     $this->add_core_assets();
-    
+
     // Detemine embed type
     $embed = H5PCore::determineEmbedType($content['embedType'], $content['library']['embedTypes']);
-    
+
     // Make sure content isn't added twice
     $cid = 'cid-' . $content['id'];
     if (!isset(self::$settings['content'][$cid])) {
-            
-      if (get_option('h5p_export', TRUE)) {
-        $export = $this->get_h5p_instance('export');
-        $exportPath = str_replace($this->get_h5p_path(), $this->get_h5p_url(), $export->getExportPath($content));
-      }
-      else {
-        $exportPath = '';
-      }
-      
+      $core = $this->get_h5p_instance('core');
+
       // Add JavaScript settings for this content
       self::$settings['content'][$cid] = array(
         'library' => H5PCore::libraryToString($content['library']),
-        'jsonContent' => $this->get_filter_parameters($content, $no_cache),
+        'jsonContent' => $core->filterParameters($content),
         'fullScreen' => $content['library']['fullscreen'],
-        'export' => $exportPath,
+        'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : ''
       );
-      
+
       // Get assets for this content
-      $core = $this->get_h5p_instance('core');
       $preloaded_dependencies = $core->loadContentDependencies($content['id'], 'preloaded');
       $files = $core->getDependenciesFiles($preloaded_dependencies);
-        
+
       if ($embed === 'div') {
         $this->enqueue_assets($files);
       }
@@ -390,7 +438,7 @@ class H5P_Plugin {
         self::$settings[$cid]['styles'] = $core->getAssetsUrls($files['styles']);
       }
     }
-    
+
     if ($embed === 'div') {
       return '<div class="h5p-content" data-content-id="' . $content['id'] . '"></div>';
     }
@@ -398,10 +446,10 @@ class H5P_Plugin {
       return '<div class="h5p-iframe-wrapper"><iframe id="h5p-iframe-' . $content['id'] . '" class="h5p-iframe" data-content-id="' . $content['id'] . '" style="height:1px" src="about:blank" frameBorder="0" scrolling="no"></iframe></div>';
     }
   }
-  
+
   /**
    * Enqueue assets for content embedded by div.
-   * 
+   *
    * @param array $assets
    */
   public function enqueue_assets(&$assets) {
@@ -421,8 +469,8 @@ class H5P_Plugin {
       }
     }
   }
-  
-  /** 
+
+  /**
    * Removes the file extension and replaces all specialchars with -
    *
    * @since 1.0.0
@@ -432,12 +480,12 @@ class H5P_Plugin {
   public function asset_handle($path) {
     return $this->plugin_slug . '-' . preg_replace(array('/\.[^.]*$/', '/[^a-z0-9]/i'), array('', '-'), $path);
   }
-  
+
   /**
    * Set core JavaScript settings and add core assets.
-   * 
+   *
    * @since 1.0.0
-   */ 
+   */
   public function add_core_assets() {
     if (self::$settings !== null) {
       return; // Already added
@@ -455,6 +503,7 @@ class H5P_Plugin {
       'loadedCss' => array(),
       'i18n' => array(
         'fullscreen' => __('Fullscreen', $this->plugin_slug),
+        'disableFullscreen' => __('Disable fullscreen', $this->plugin_slug),
         'download' => __('Download', $this->plugin_slug),
         'copyrights' => __('Rights of use', $this->plugin_slug),
         'embed' => __('Embed', $this->plugin_slug),
@@ -470,24 +519,33 @@ class H5P_Plugin {
         'downloadDescription' => __('Download this content as a H5P file.', $this->plugin_slug),
         'copyrightsDescription' => __('View copyright information for this content.', $this->plugin_slug),
         'embedDescription' => __('View the embed code for this content.', $this->plugin_slug),
-        'h5pDescription' => __('Visit H5P.org to check out more cool content.', $this->plugin_slug)
+        'h5pDescription' => __('Visit H5P.org to check out more cool content.', $this->plugin_slug),
+        'upgradeLibrary' => __('Upgrade library content', $this->plugin_slug),
+        'viewLibrary' => __('View library details', $this->plugin_slug),
+        'deleteLibrary' => __('Delete library', $this->plugin_slug),
+        'NA' => __('N/A', $this->plugin_slug)
       )
     );
-    
+
     $cache_buster = '?ver=' . self::VERSION;
-    
+
     // Add core stylesheets
     foreach (H5PCore::$styles as $style) {
       $style_url = plugins_url('h5p/h5p-php-library/' . $style);
       self::$settings['core']['styles'][] = $style_url . $cache_buster;
       wp_enqueue_style($this->asset_handle('core-' . $style), $style_url, array(), self::VERSION);
     }
-    
+
+    // Add custom WP style
+    $style_url = plugins_url('h5p/public/styles/h5p-integration.css');
+    self::$settings['core']['styles'][] = $style_url . $cache_buster;
+    wp_enqueue_style($this->asset_handle('integration'), $style_url, array(), self::VERSION);
+
     // Add JavaScript with library framework integration
     $script_url = plugins_url('h5p/public/scripts/h5p-integration.js');
     self::$settings['core']['scripts'][] = $script_url . $cache_buster;
     wp_enqueue_script($this->asset_handle('integration'), $script_url, array(), self::VERSION);
-    
+
     // Add core JavaScript
     foreach (H5PCore::$scripts as $script) {
       $script_url = plugins_url('h5p/h5p-php-library/' . $script);
@@ -495,21 +553,21 @@ class H5P_Plugin {
       wp_enqueue_script($this->asset_handle('core-' . $script), $script_url, array(), self::VERSION);
     }
   }
-  
+
   /**
    * Add H5P JavaScript settings to the bottom of the page.
-   * 
+   *
    * @since 1.0.0
-   */ 
+   */
   public function add_settings() {
     if (self::$settings !== null) {
       $this->print_settings(self::$settings);
     }
   }
-  
+
   /**
    * JSON encode and print the given H5P JavaScript settings.
-   * 
+   *
    * @since 1.0.0
    * @param array $settings
    */
@@ -519,58 +577,21 @@ class H5P_Plugin {
       print '<script>H5P={settings:' . $json_settings . '}</script>';
     }
   }
-  
+
   /**
    * Get added JavaScript settings.
-   * 
+   *
    * @since 1.0.0
    * @return array
    */
   public function get_settings() {
     return self::$settings;
   }
-  
+
   /**
-   * Filter parameters before they're sent to the user.
-   * 
-   * @since 1.0.0
-   * @param object $content
-   * @return string
-   */
-  public function get_filter_parameters($content, $no_cache = FALSE) {
-    $cache_key = 'h5p-content-' . $content['id'];
-    $filtered_parameters = ($no_cache ? NULL : wp_cache_get($cache_key));
-
-    if (!$filtered_parameters) {
-      // Not cached
-      $filtered_parameters = NULL; 
-      
-      // Get semantics.
-      $core = $this->get_h5p_instance('core');
-      $semantics = $core->loadLibrarySemantics($content['library']['name'], $content['library']['majorVersion'], $content['library']['minorVersion']);
-      
-      if ($semantics !== NULL) {
-        // Get params as object
-        $filtered_parameters = json_decode($content['params']);
-
-        // Validate and filter against main library semantics.
-        $validator = $this->get_h5p_instance('contentvalidator');
-        $validator->validateBySemantics($filtered_parameters, $semantics);
-
-        $filtered_parameters = json_encode($filtered_parameters);
-      }
-
-      // Cache
-      wp_cache_set($cache_key, $filtered_parameters);
-    }
-    
-    return $filtered_parameters;
-  }
-  
-  /**
-   * This function will unlink tmp editor files for content 
+   * This function will unlink tmp editor files for content
    * that has never been saved.
-   * 
+   *
    * @since 1.0.0
    */
   public function remove_old_tmp_files() {

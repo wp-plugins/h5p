@@ -39,9 +39,6 @@ var H5PLibraryDetails= H5PLibraryDetails || {};
       $libraryInfo.append(H5PUtils.createLabeledField(title, value));
     });
     
-    // List counter:
-    $libraryInfo.append(H5PUtils.createLabeledField(H5PLibraryDetails.library.translations.contentCount, H5PLibraryDetails.currentContent ? H5PLibraryDetails.currentContent.length : 0));
-    
     return $libraryInfo;
   };
   
@@ -49,6 +46,10 @@ var H5PLibraryDetails= H5PLibraryDetails || {};
    * Create the content list with searching and paging 
    */
   H5PLibraryDetails.createContentElement = function () {
+    if (H5PLibraryDetails.library.notCached !== undefined) {
+      return H5PUtils.getRebuildCache(H5PLibraryDetails.library.notCached);
+    }
+    
     if (H5PLibraryDetails.currentContent === undefined) {
       H5PLibraryDetails.$content = $('<div class="h5p-content empty">' + H5PLibraryDetails.library.translations.noContent + '</div>');
     }
@@ -96,8 +97,8 @@ var H5PLibraryDetails= H5PLibraryDetails || {};
     // Only create pager if needed:
     if(H5PLibraryDetails.currentContent.length > H5PLibraryDetails.PAGER_SIZE) {
       
-      H5PLibraryDetails.$previous = $('<button type="button" class="previous h5p-admin">&#xf137;</button>');
-      H5PLibraryDetails.$next = $('<button type="button" class="next h5p-admin">&#xf138;</button>');
+      H5PLibraryDetails.$previous = $('<button type="button" class="previous h5p-admin"><</button>');
+      H5PLibraryDetails.$next = $('<button type="button" class="next h5p-admin">></button>');
       
       H5PLibraryDetails.$previous.on('click', function () {
         if(H5PLibraryDetails.$previous.hasClass('disabled')) {

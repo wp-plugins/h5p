@@ -1,10 +1,10 @@
 ﻿=== H5P ===
-Contributors: icc0rz
+Contributors: icc0rz, fnoks, falcon28
 Donate link: http://h5p.org
-Tags: h5p, interactive content, interactive video, presentation, html5, modern web
+Tags: h5p, interactive content, interactive video, presentation, html5, modern web, education
 Requires at least: 3.8.1
-Tested up to: 3.9
-Stable tag: 1.0
+Tested up to: 4.0
+Stable tag: 1.1
 License: MIT
 License URI: http://opensource.org/licenses/MIT
 
@@ -49,3 +49,13 @@ If you're cloning this plugin from GitHub, remember to get the sub modules as we
 
 = 1.0 =
 This is the first release of this plugin.
+
+= 1.1 =
+Imported the latest changes and bug fixes from h5p core.
+Improved multilingual support. Added missing translations, and it should now be possible to translate the menu item without ruining the H5P forms.
+Fixed so that content dependencies cache is rebuilt when library dependencies changes. This also includes new export files.
+The H5P Editor is now inside an iframe to avoid messing up css styling.
+A library administration user interface has been added. This supports content upgrades, deletion of libraries without content and uploading h5p packages without content.
+Added own h5p capabilities to roles, matching the defaults used for posts.
+Fixed bugs related to Windows paths and when debugging is enabled with notices.
+Other minor bug fixes and improvements.
