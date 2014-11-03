@@ -12,10 +12,6 @@
 /**
  * Plugin class.
  *
- * TODO: Add embed
- * TODO: Test with PostgreSQL
- * TODO: Check i18n
- *
  * @package H5P_Plugin
  * @author Joubel <contact@joubel.com>
  */
@@ -28,7 +24,7 @@ class H5P_Plugin {
    * @since 1.0.0
    * @var string
    */
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
 
   /**
    * The Unique identifier for this plugin.
@@ -92,8 +88,11 @@ class H5P_Plugin {
     // Clean up tmp editor files
     add_action('h5p_daily_cleanup', array($this, 'remove_old_tmp_files'));
 
-    // Check for updates
-    add_action('plugins_loaded', array($this, 'check_for_updates'), 1);
+    // Check for library updates
+    add_action('h5p_daily_cleanup', array($this, 'get_library_updates'));
+
+    // Always check if the plugin has been updated to a newer version
+    add_action('init', array('H5P_Plugin', 'check_for_updates'), 1);
   }
 
   /**
@@ -129,10 +128,8 @@ class H5P_Plugin {
    * @param boolean $network_wide
    */
   public static function activate($network_wide) {
-    self::update_database();
-
-    // Keep track of which DB we have.
-    add_option('h5p_version', self::VERSION);
+    // Check to see if the plugin has been updated to a newer version
+    self::check_for_updates();
 
     // Cleaning rutine
     wp_schedule_event(time(), 'daily', 'h5p_daily_cleanup');
@@ -148,6 +145,9 @@ class H5P_Plugin {
     global $wpdb;
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+
+    // Get charset to use
+    $charset = self::determine_charset();
 
     // Keep track of h5p content entities
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_contents (
@@ -165,8 +165,8 @@ class H5P_Plugin {
       license VARCHAR(7) NULL,
       keywords TEXT NULL,
       description TEXT NULL,
-      UNIQUE KEY  (id)
-    );");
+      PRIMARY KEY  (id)
+    ) {$charset};");
 
     // Keep track of content dependencies
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_contents_libraries (
@@ -174,8 +174,22 @@ class H5P_Plugin {
       library_id INT UNSIGNED NOT NULL,
       dependency_type VARCHAR(255) NOT NULL,
       drop_css TINYINT UNSIGNED NOT NULL,
-      UNIQUE KEY  (content_id, library_id, dependency_type)
-    );");
+      PRIMARY KEY  (content_id,library_id,dependency_type)
+    ) {$charset};");
+
+    // Keep track of results (contents >-< users)
+    dbDelta("CREATE TABLE {$wpdb->prefix}h5p_results (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      content_id INT UNSIGNED NOT NULL,
+      user_id INT UNSIGNED NOT NULL,
+      score INT UNSIGNED NOT NULL,
+      max_score INT UNSIGNED NOT NULL,
+      opened INT UNSIGNED NOT NULL,
+      finished INT UNSIGNED NOT NULL,
+      time INT UNSIGNED NOT NULL,
+      PRIMARY KEY  (id),
+      KEY content_user (content_id,user_id)
+    ) {$charset};");
 
     // Keep track of h5p libraries
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_libraries (
@@ -188,50 +202,60 @@ class H5P_Plugin {
       minor_version INT UNSIGNED NOT NULL,
       patch_version INT UNSIGNED NOT NULL,
       runnable INT UNSIGNED NOT NULL,
+      restricted INT UNSIGNED NOT NULL DEFAULT 0,
       fullscreen INT UNSIGNED NOT NULL,
       embed_types VARCHAR(255) NOT NULL,
       preloaded_js TEXT NULL,
       preloaded_css TEXT NULL,
       drop_library_css TEXT NULL,
       semantics TEXT NOT NULL,
-      UNIQUE KEY  (id)
-    );");
+      tutorial_url VARCHAR(1023) NOT NULL,
+      PRIMARY KEY  (id),
+      KEY name_version (name,major_version,minor_version,patch_version),
+      KEY runnable (runnable)
+    ) {$charset};");
 
     // Keep track of h5p library dependencies
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_libraries_libraries (
       library_id INT UNSIGNED NOT NULL,
       required_library_id INT UNSIGNED NOT NULL,
       dependency_type VARCHAR(255) NOT NULL,
-      UNIQUE KEY  (library_id, required_library_id)
-    );");
+      PRIMARY KEY  (library_id,required_library_id)
+    ) {$charset};");
 
     // Keep track of h5p library translations
     dbDelta("CREATE TABLE {$wpdb->prefix}h5p_libraries_languages (
       library_id INT UNSIGNED NOT NULL,
       language_code VARCHAR(255) NOT NULL,
       translation TEXT NOT NULL,
-      UNIQUE KEY  (library_id, language_code)
-    );");
-
-    // Add new capabilities
-    $administrator = get_role('administrator');
-    $administrator->add_cap('manage_h5p_libraries');
-    $administrator->add_cap('edit_h5p_contents');
-    $administrator->add_cap('edit_others_h5p_contents');
-
-    $editor = get_role('editor');
-    $editor->add_cap('edit_h5p_contents');
-    $editor->add_cap('edit_others_h5p_contents');
-
-    $author = get_role('author');
-    $author->add_cap('edit_h5p_contents');
-
-    $contributor = get_role('contributor');
-    $contributor->add_cap('edit_h5p_contents');
+      PRIMARY KEY  (library_id,language_code)
+    ) {$charset};");
 
     // Add default setting options
     add_option('h5p_export', TRUE);
     add_option('h5p_icon', TRUE);
+    add_option('h5p_track_user', TRUE);
+    add_option('h5p_library_updates', TRUE);
+  }
+
+  /**
+   * Determine charset to use for database tables
+   *
+   * @since 1.2.0
+   * @global \wpdb $wpdb
+   */
+  public static function determine_charset() {
+    global $wpdb;
+    $charset = '';
+
+    if (!empty($wpdb->charset)) {
+      $charset = "DEFAULT CHARACTER SET {$wpdb->charset}";
+
+      if (!empty($wpdb->collate)) {
+        $charset .= " COLLATE {$wpdb->collate}";
+      }
+    }
+    return $charset;
   }
 
   /**
@@ -243,12 +267,128 @@ class H5P_Plugin {
   }
 
   /**
-   * @since 1.1.0
+   * Check if the plugin has been updated and if we need to run some upgrade
+   * scripts, change the database or something else.
+   *
+   * @since 1.2.0
    */
-  public function check_for_updates() {
-    if (get_option('h5p_version') !== self::VERSION) {
-      self::update_database();
+  public static function check_for_updates() {
+    $current_version = get_option('h5p_version');
+    if ($current_version === self::VERSION) {
+      return; // Same version as before
+    }
+
+    // We have a new version!
+    if (!$current_version) {
+      // Never installed before
+      $current_version = '0.0.0';
+    }
+
+    // Split version number
+    $current_version = explode('.', $current_version);
+    $major = (int) $current_version[0];
+    $minor = (int) $current_version[1];
+    $patch = (int) $current_version[2];
+
+    // Check and update database
+    self::update_database();
+
+    // Run version specific updates
+    if ($major < 1 || ($major === 1 && $minor < 2)) { // < 1.2.0
+      self::upgrade_120();
+    }
+
+    // Keep track of which version of the plugin we have.
+    if ($current_version === '0.0.0') {
+      add_option('h5p_version', self::VERSION);
+    }
+    else {
       update_option('h5p_version', self::VERSION);
+    }
+  }
+
+  /**
+   * Migration procedures when upgrading to >= 1.2.0.
+   *
+   * @since 1.2.0
+   * @global \wpdb $wpdb
+   */
+  public static function upgrade_120() {
+    global $wpdb;
+
+    // Add caps again, has not worked for everyone in 1.1.0
+    self::add_capabilities();
+
+    // Clean up duplicate indexes (due to bug in dbDelta)
+    self::remove_duplicate_indexes('h5p_contents', 'id');
+    self::remove_duplicate_indexes('h5p_contents_libraries', 'content_id');
+    self::remove_duplicate_indexes('h5p_results', 'id');
+    self::remove_duplicate_indexes('h5p_libraries', 'id');
+    self::remove_duplicate_indexes('h5p_libraries_libraries', 'library_id');
+    self::remove_duplicate_indexes('h5p_libraries_languages', 'library_id');
+
+    // Make sure we use the charset defined in wp-config, and not DB default.
+    $charset = self::determine_charset();
+    if (!empty($charset)) {
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}h5p_contents` {$charset}");
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}h5p_contents_libraries` {$charset}");
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}h5p_results` {$charset}");
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}h5p_libraries` {$charset}");
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}h5p_libraries_libraries` {$charset}");
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}h5p_libraries_languages` {$charset}");
+    }
+  }
+
+  /**
+   * Remove duplicate keys that might have been created by a bug in dbDelta.
+   *
+   * @since 1.2.0
+   * @global \wpdb $wpdb
+   * @param string $table Table name without wp prefix
+   * @param string $index Key name
+   */
+  public static function remove_duplicate_indexes($table, $index) {
+    global $wpdb;
+    $wpdb->hide_errors();
+
+    $wpdb->query("ALTER TABLE `{$wpdb->prefix}{$table}` DROP INDEX `{$index}`");
+    for ($i = 0; $i < 5; $i++) {
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}{$table}` DROP INDEX `{$index}_$i`");
+    }
+
+    $wpdb->show_errors();
+  }
+
+  /**
+   * Add capabilities to roles. "Copy" default WP caps on roles.
+   *
+   * @since 1.2.0
+   */
+  private function add_capabilities() {
+    global $wp_roles;
+    if (!isset($wp_roles)) {
+      $wp_roles = new WP_Roles();
+    }
+
+    $all_roles = $wp_roles->roles;
+    foreach ($all_roles as $role_name => $role_info) {
+      $role = get_role($role_name);
+
+      if (isset($role_info['capabilities']['install_plugins'])) {
+        $role->add_cap('disable_h5p_security');
+      }
+      if (isset($role_info['capabilities']['manage_options'])) {
+        $role->add_cap('manage_h5p_libraries');
+      }
+      if (isset($role_info['capabilities']['edit_others_pages'])) {
+        $role->add_cap('edit_others_h5p_contents');
+      }
+      if (isset($role_info['capabilities']['edit_posts'])) {
+        $role->add_cap('edit_h5p_contents');
+      }
+      if (isset($role_info['capabilities']['read'])) {
+        $role->add_cap('view_h5p_results');
+      }
     }
   }
 
@@ -262,7 +402,7 @@ class H5P_Plugin {
     $locale = apply_filters('plugin_locale', get_locale(), $domain);
 
     load_textdomain($domain, trailingslashit(WP_LANG_DIR) . $domain . '/' . $domain . '-' . $locale . '.mo');
-    load_plugin_textdomain($domain, FALSE, basename(plugin_dir_path(dirname( __FILE__ ))) . '/languages/');
+    load_plugin_textdomain($domain, FALSE, basename(plugin_dir_path(dirname( __FILE__ ))) . '/languages');
   }
 
   /**
@@ -499,8 +639,10 @@ class H5P_Plugin {
       'url' => $this->get_h5p_url(),
       'exportEnabled' => get_option('h5p_export', TRUE),
       'h5pIconInActionBar' => get_option('h5p_icon', TRUE),
+      'postUserStatistics' => (get_option('h5p_track_user', TRUE) === '1'),
       'loadedJs' => array(),
       'loadedCss' => array(),
+      'ajaxPath' => admin_url('admin-ajax.php?action=h5p_'),
       'i18n' => array(
         'fullscreen' => __('Fullscreen', $this->plugin_slug),
         'disableFullscreen' => __('Disable fullscreen', $this->plugin_slug),
@@ -541,6 +683,9 @@ class H5P_Plugin {
     self::$settings['core']['styles'][] = $style_url . $cache_buster;
     wp_enqueue_style($this->asset_handle('integration'), $style_url, array(), self::VERSION);
 
+    // Make sure we have jQuery for the integration
+    wp_enqueue_script('jquery');
+
     // Add JavaScript with library framework integration
     $script_url = plugins_url('h5p/public/scripts/h5p-integration.js');
     self::$settings['core']['scripts'][] = $script_url . $cache_buster;
@@ -574,7 +719,7 @@ class H5P_Plugin {
   public function print_settings(&$settings) {
     $json_settings = json_encode($settings);
     if ($json_settings !== FALSE) {
-      print '<script>H5P={settings:' . $json_settings . '}</script>';
+      print '<script>var H5P = H5P || {};H5P.settings=' . $json_settings . '</script>';
     }
   }
 
@@ -606,5 +751,16 @@ class H5P_Plugin {
         }
       }
     }
+  }
+
+  /**
+   * Try to connect with H5P.org and look for updates to our libraries.
+   * Can be disabled through settings
+   *
+   * @since 1.2.0
+   */
+  public function get_library_updates() {
+    $core = $this->get_h5p_instance('core');
+    $core->fetchLibrariesMetadata();
   }
 }

@@ -10,10 +10,9 @@ class H5PEditorWordPressStorage implements H5peditorStorage {
    */
   function __construct() { }
 
-  public function getLanguage($name, $majorVersion, $minorVersion) {
+  public function getLanguage($name, $majorVersion, $minorVersion, $language) {
     global $wpdb;
-    $plugin = H5P_Plugin::get_instance();
-    
+
     return $wpdb->get_var($wpdb->prepare(
         "SELECT hlt.translation
           FROM {$wpdb->prefix}h5p_libraries_languages hlt
@@ -22,7 +21,7 @@ class H5PEditorWordPressStorage implements H5peditorStorage {
           AND hl.major_version = %d
           AND hl.minor_version = %d
           AND hlt.language_code = %s",
-        $name, $majorVersion, $minorVersion, $plugin->get_language())
+        $name, $majorVersion, $minorVersion, $language)
       );
   }
 
@@ -40,12 +39,13 @@ class H5PEditorWordPressStorage implements H5peditorStorage {
 
   public function getLibraries($libraries = NULL) {
     global $wpdb;
-    
+    $super_user = current_user_can('manage_h5p_libraries');
+
     if ($libraries !== NULL) {
       // Get details for the specified libraries only.
       foreach ($libraries as $library) {
         $details = $wpdb->get_row($wpdb->prepare(
-            "SELECT title, runnable 
+            "SELECT title, runnable, restricted, tutorial_url
               FROM {$wpdb->prefix}h5p_libraries
               WHERE name = %s
               AND major_version = %d
@@ -54,22 +54,29 @@ class H5PEditorWordPressStorage implements H5peditorStorage {
             $library->name, $library->majorVersion, $library->minorVersion
           ));
         if ($details) {
+          $library->tutorialUrl = $details->tutorial_url;
           $library->title = $details->title;
           $library->runnable = $details->runnable;
+          $library->restricted = $super_user ? FALSE : ($details->restricted === '1' ? TRUE : FALSE);
         }
       }
-      
+
       return $libraries;
     }
-    
+
     $libraries = array();
 
     $libraries_result = $wpdb->get_results(
-        "SELECT name, title, major_version as majorVersion, minor_version as minorVersion 
+        "SELECT name,
+                title,
+                major_version AS majorVersion,
+                minor_version AS minorVersion,
+                tutorial_url AS tutorialUrl,
+                restricted
           FROM {$wpdb->prefix}h5p_libraries
-          WHERE runnable = 1 
-          AND semantics IS NOT NULL 
-          ORDER BY title"  
+          WHERE runnable = 1
+          AND semantics IS NOT NULL
+          ORDER BY title"
       );
     foreach ($libraries_result as $library) {
       // Make sure we only display the newest version of a library.
@@ -86,7 +93,9 @@ class H5PEditorWordPressStorage implements H5peditorStorage {
           }
         }
       }
-      
+
+      $library->restricted = $super_user ? FALSE : ($library->restricted === '1' ? TRUE : FALSE);
+
       // Add new library
       $libraries[] = $library;
     }
