@@ -1433,7 +1433,7 @@ Class H5PExport {
       'title' => $content['title'],
       // TODO - stop using 'und', this is not the preferred way.
       // Either remove language from the json if not existing, or use "language": null
-      'language' => isset($content['language']) ? $content['language'] : 'und',
+      'language' => (isset($content['language']) && strlen(trim($content['language'])) !== 0) ? $content['language'] : 'und',
       'mainLibrary' => $content['library']['name'],
       'embedTypes' => $embedTypes,
     );
@@ -1465,7 +1465,7 @@ Class H5PExport {
 
     // Create new zip instance.
     $zip = new ZipArchive();
-    $zip->open($zipPath, ZIPARCHIVE::CREATE);
+    $zip->open($zipPath, ZIPARCHIVE::CREATE | ZIPARCHIVE::OVERWRITE);
 
     // Get all files and folders in $tempPath
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tempPath . DIRECTORY_SEPARATOR));
