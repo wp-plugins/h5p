@@ -82,3 +82,6 @@ Fixed issue when repacking h5p files after dependencies have changed, old librar
 Added missing string to translation.
 Fixed code causing php notices.
 Added H5P_DEV option. Can be set in wp-config to always override libraries when "new" ones are uploaded.
+
+ 
+ 
