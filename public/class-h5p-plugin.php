@@ -24,7 +24,7 @@ class H5P_Plugin {
    * @since 1.0.0
    * @var string
    */
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
 
   /**
    * The Unique identifier for this plugin.
@@ -93,6 +93,9 @@ class H5P_Plugin {
 
     // Always check if the plugin has been updated to a newer version
     add_action('init', array('H5P_Plugin', 'check_for_updates'), 1);
+
+    // Add menu options to admin bar.
+    add_action('admin_bar_menu', array($this, 'admin_bar'));
   }
 
   /**
@@ -173,6 +176,7 @@ class H5P_Plugin {
       content_id INT UNSIGNED NOT NULL,
       library_id INT UNSIGNED NOT NULL,
       dependency_type VARCHAR(255) NOT NULL,
+      weight SMALLINT UNSIGNED NOT NULL DEFAULT 0,
       drop_css TINYINT UNSIGNED NOT NULL,
       PRIMARY KEY  (content_id,library_id,dependency_type)
     ) {$charset};");
@@ -236,6 +240,7 @@ class H5P_Plugin {
     add_option('h5p_icon', TRUE);
     add_option('h5p_track_user', TRUE);
     add_option('h5p_library_updates', TRUE);
+    add_option('h5p_minitutorial', FALSE);
   }
 
   /**
@@ -415,6 +420,20 @@ class H5P_Plugin {
   }
 
   /**
+  * Add menu options to the WordPress admin bar
+  *
+  * @since 1.2.2
+  */
+  public function admin_bar($wp_admin_bar) {
+    $wp_admin_bar->add_menu(array(
+      'parent' => 'new-content',
+      'id' => 'new-h5p-content',
+      'title' => __('H5P Content', $this->plugin_slug),
+      'href' => admin_url('admin.php?page=h5p_new')
+    ));
+  }
+
+  /**
    * Get the path to the H5P files folder.
    *
    * @since 1.0.0
@@ -563,7 +582,8 @@ class H5P_Plugin {
         'library' => H5PCore::libraryToString($content['library']),
         'jsonContent' => $core->filterParameters($content),
         'fullScreen' => $content['library']['fullscreen'],
-        'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : ''
+        'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : '',
+        'url' => admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id'])
       );
 
       // Get assets for this content
@@ -631,6 +651,8 @@ class H5P_Plugin {
       return; // Already added
     }
 
+    $current_user = wp_get_current_user();
+
     self::$settings = array(
       'core' => array(
         'styles' => array(),
@@ -643,6 +665,10 @@ class H5P_Plugin {
       'loadedJs' => array(),
       'loadedCss' => array(),
       'ajaxPath' => admin_url('admin-ajax.php?action=h5p_'),
+      'user' => array(
+        'name' => $current_user->display_name,
+        'mail' => $current_user->user_email
+      ),
       'i18n' => array(
         'fullscreen' => __('Fullscreen', $this->plugin_slug),
         'disableFullscreen' => __('Disable fullscreen', $this->plugin_slug),
@@ -741,7 +767,14 @@ class H5P_Plugin {
    */
   public function remove_old_tmp_files() {
     $plugin = H5P_Plugin::get_instance();
-    foreach (glob($plugin->get_h5p_path() . DIRECTORY_SEPARATOR . 'editor' . DIRECTORY_SEPARATOR . '*') as $dir) {
+
+    $h5p_path = $plugin->get_h5p_path();
+    $editor_path = $path . DIRECTORY_SEPARATOR . 'editor';
+    if (!is_dir($h5p_path) || !is_dir($editor_path)) {
+      return;
+    }
+
+    foreach (glob($editor_path . DIRECTORY_SEPARATOR . '*') as $dir) {
       if (is_dir($dir)) {
         foreach (glob($dir . DIRECTORY_SEPARATOR . '*') as $file) {
           if (time() - filemtime($file) > 86400) {

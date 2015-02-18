@@ -90,7 +90,14 @@ class H5PWordPress implements H5PFrameworkInterface {
     static $path;
 
     if (is_null($path)) {
-      $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $_FILES['h5p_file']['name'];
+      // Try upload dir first since some multi-hosted envs doesn't allow writing to sys tmp dir.
+      $path = ini_get('upload_tmp_dir');
+      if (!$path) {
+        // Some systems doesn't set set the upload dir, so try this
+        $path = sys_get_temp_dir();
+      }
+
+      $path .= '/' . $_FILES['h5p_file']['name'];
     }
 
     return $path;
@@ -121,7 +128,7 @@ class H5PWordPress implements H5PFrameworkInterface {
     global $wpdb;
 
     if (defined('H5P_DEV') && H5P_DEV) {
-      // Makes sure libraries are updated, patch version does not matter. 
+      // Makes sure libraries are updated, patch version does not matter.
       return TRUE;
     }
 
@@ -431,8 +438,8 @@ class H5PWordPress implements H5PFrameworkInterface {
     global $wpdb;
 
     $wpdb->query($wpdb->prepare(
-        "INSERT INTO {$wpdb->prefix}h5p_contents_libraries (content_id, library_id, dependency_type, drop_css)
-        SELECT %d, hcl.library_id, hcl.dependency_type, hcl.drop_css
+        "INSERT INTO {$wpdb->prefix}h5p_contents_libraries (content_id, library_id, dependency_type, weight, drop_css)
+        SELECT %d, hcl.library_id, hcl.dependency_type, hcl.weight, hcl.drop_css
           FROM {$wpdb->prefix}h5p_contents_libraries hcl
           WHERE hcl.content_id = %d",
         $contentId, $copyFromId)
@@ -479,7 +486,8 @@ class H5PWordPress implements H5PFrameworkInterface {
             'content_id' => $contentId,
             'library_id' => $dependency['library']['libraryId'],
             'dependency_type' => $dependency['type'],
-            'drop_css' => $dropCss
+            'drop_css' => $dropCss,
+            'weight' => $dependency['weight']
           ),
           array(
             '%d',
@@ -630,6 +638,7 @@ class H5PWordPress implements H5PFrameworkInterface {
       $queryArgs[] = $type;
     }
 
+    $query .= " ORDER BY hcl.weight";
     return $wpdb->get_results($wpdb->prepare($query, $queryArgs), ARRAY_A);
   }
 
@@ -781,4 +790,8 @@ class H5PWordPress implements H5PFrameworkInterface {
       array('%s')
     );
   }
+
+  // Magic stuff
+  public function lockDependencyStorage() {}
+  public function unlockDependencyStorage() {}
 }
