@@ -579,7 +579,6 @@ class H5PWordPress implements H5PFrameworkInterface {
    * Implements alterLibrarySemantics
    */
   public function alterLibrarySemantics(&$semantics, $name, $majorVersion, $minorVersion) {
-    // TODO: Check if this actually works
     do_action('h5p_alter_library_semantics', $semantics, $name, $majorVersion, $minorVersion);
   }
 
@@ -791,7 +790,7 @@ class H5PWordPress implements H5PFrameworkInterface {
     );
   }
 
-  // Magic stuff
+  // Magic stuff not used, we do not support library development mode.
   public function lockDependencyStorage() {}
   public function unlockDependencyStorage() {}
 }
