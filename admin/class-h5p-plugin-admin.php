@@ -103,6 +103,71 @@ class H5P_Plugin_Admin {
 
     // Display admin notices
     add_action('admin_notices', array($this, 'admin_notices'));
+
+    // Embed
+    add_action('wp_ajax_h5p_embed', array($this, 'embed'));
+    add_action('wp_ajax_nopriv_h5p_embed', array($this, 'embed'));
+  }
+
+  /**
+   * Print page for embed iframe
+   *
+   * @since 1.3.0
+   */
+  public function embed() {
+    // Allow other sites to embed
+    header_remove('X-Frame-Options');
+
+    // Find content
+    $id = filter_input(INPUT_GET, 'id', FILTER_SANITIZE_NUMBER_INT);
+    if ($id !== NULL) {
+      $plugin = H5P_Plugin::get_instance();
+      $content = $plugin->get_content($id);
+      if (!is_string($content)) {
+        $lang = $plugin->get_language();
+        $cache_buster = '?ver=' . H5P_Plugin::VERSION;
+
+        // Get core settings
+        $integration = $plugin->get_core_settings();
+        // TODO: The non-content specific settings could be apart of a combined h5p-core.js file.
+
+        // Get core scripts
+        $scripts = array();
+        foreach (H5PCore::$scripts as $script) {
+          $scripts[] = plugins_url('h5p/h5p-php-library/' . $script) . $cache_buster;
+        }
+
+        // Get core styles
+        $styles = array();
+        foreach (H5PCore::$styles as $style) {
+          $styles[] = plugins_url('h5p/h5p-php-library/' . $style) . $cache_buster;
+        }
+
+        // Get content settings
+        $core = $plugin->get_h5p_instance('core');
+        $integration['contents']['cid-' . $content['id']] = array(
+          'library' => H5PCore::libraryToString($content['library']),
+          'jsonContent' => $core->filterParameters($content),
+          'fullScreen' => $content['library']['fullscreen'],
+          'exportUrl' => get_option('h5p_export', TRUE) ? $plugin->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : '',
+          'showH5PIconInActionBar' => get_option('h5p_icon', TRUE)
+        );
+
+        // Get content assets
+        $preloaded_dependencies = $core->loadContentDependencies($content['id'], 'preloaded');
+        $files = $core->getDependenciesFiles($preloaded_dependencies);
+
+        $scripts = array_merge($scripts, $core->getAssetsUrls($files['scripts']));
+        $styles = array_merge($styles, $core->getAssetsUrls($files['styles']));
+
+        include_once(plugin_dir_path(__FILE__) . '../h5p-php-library/embed.php');
+        exit;
+      }
+    }
+
+    // Simple unavailble page
+    print '<body style="margin:0"><div style="background: #fafafa url(http://h5p.org/sites/all/themes/professional_themec/images/h5p.svg) no-repeat center;background-size: 50% 50%;width: 100%;height: 100%;"></div><div style="width:100%;position:absolute;top:75%;text-align:center;color:#434343;font-family: Consolas,monaco,monospace">' . __('Content unavailable.', $this->plugin_slug) . '</div></body>';
+    exit;
   }
 
   /**
@@ -559,13 +624,14 @@ class H5P_Plugin_Admin {
    * @param string $source URL for data
    * @param array $headers for the table
    */
-  public function print_data_view_settings($name, $source, $headers, $filters, $empty) {
+  public function print_data_view_settings($name, $source, $headers, $filters, $empty, $order) {
     // Add JS settings
     $data_views = array();
     $data_views[$name] = array(
       'source' => $source,
       'headers' => $headers,
       'filters' => $filters,
+      'order' => $order,
       'l10n' => array(
         'loading' => __('Loading data.', $this->plugin_slug),
         'ajaxFailed' => __('Failed to load data.', $this->plugin_slug),
@@ -623,7 +689,11 @@ class H5P_Plugin_Admin {
         __('Time spent', $this->plugin_slug)
       ),
       array(true),
-      __("There are no logged results for your user.", $this->plugin_slug)
+      __("There are no logged results for your user.", $this->plugin_slug),
+      (object) array(
+        'by' => 4,
+        'dir' => 0
+      )
     );
   }
 
