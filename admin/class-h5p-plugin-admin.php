@@ -86,6 +86,9 @@ class H5P_Plugin_Admin {
     add_action('wp_ajax_h5p_content_upgrade_library', array($this->library, 'ajax_upgrade_library'));
     add_action('wp_ajax_h5p_content_upgrade_progress', array($this->library, 'ajax_upgrade_progress'));
 
+    // AJAX for handling content usage datas
+    add_action('wp_ajax_h5p_contents_user_data', array($this, 'ajax_contents_user_data'));
+
     // AJAX for logging results
     add_action('wp_ajax_h5p_setFinished', array($this, 'ajax_results'));
 
@@ -107,6 +110,9 @@ class H5P_Plugin_Admin {
     // Embed
     add_action('wp_ajax_h5p_embed', array($this, 'embed'));
     add_action('wp_ajax_nopriv_h5p_embed', array($this, 'embed'));
+
+    // Remove user data and results
+    add_action('deleted_user', array($this, 'deleted_user'));
   }
 
   /**
@@ -144,14 +150,8 @@ class H5P_Plugin_Admin {
         }
 
         // Get content settings
+        $integration['contents']['cid-' . $content['id']] = $plugin->get_content_settings($content);
         $core = $plugin->get_h5p_instance('core');
-        $integration['contents']['cid-' . $content['id']] = array(
-          'library' => H5PCore::libraryToString($content['library']),
-          'jsonContent' => $core->filterParameters($content),
-          'fullScreen' => $content['library']['fullscreen'],
-          'exportUrl' => get_option('h5p_export', TRUE) ? $plugin->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : '',
-          'showH5PIconInActionBar' => get_option('h5p_icon', TRUE)
-        );
 
         // Get content assets
         $preloaded_dependencies = $core->loadContentDependencies($content['id'], 'preloaded');
@@ -192,14 +192,14 @@ class H5P_Plugin_Admin {
    */
   public function admin_notices() {
     if (!get_option('h5p_minitutorial', FALSE)) {
-      // TODO: Make the user close it?
+      // TODO: We should make the user close the message. (so the user doesn't miss out on it)
       update_option('h5p_minitutorial', TRUE);
       ?>
         <div class="updated">
           <p><?php _e('Thank you for choosing H5P.', $this->plugin_slug); ?></p>
           <?php $this->print_minitutorial(); ?>
-          <p><strong><?php _e('Content type upgrades are here!'); ?></strong><br/>
-          <?php printf(__('If you\'ve just upgraded you plugin, you should install the <a href="%s" target="_blank">lastest version</a> of your content types.'), 'http://h5p.org/update-all-content-types'); ?></p>
+          <p><strong><?php _e('Content type upgrades are here!', $this->plugin_slug); ?></strong><br/>
+          <?php printf(wp_kses(__('If you\'ve just upgraded you plugin, you should install the <a href="%s" target="_blank">lastest version</a> of your content types.', $this->plugin_slug), array('a' => array('href' => array(), 'target' => array()))), esc_url('http://h5p.org/update-all-content-types')); ?></p>
         </div>
       <?php
     }
@@ -216,11 +216,11 @@ class H5P_Plugin_Admin {
       <p><?php _e('In order to take advantage of this plugin you must first select and download the H5P content types you wish to use.', $this->plugin_slug); ?><br/>
         <strong><?php _e('Here is a short guide to get you started:', $this->plugin_slug); ?></strong></p>
       <ol>
-        <li><?php printf(__('Select and download the desired content types from <a href="%s" target="_blank">H5P.org</a>.'), 'http://h5p.org/content-types-and-applications'); ?></li>
-        <li><?php printf(__('Upload the content types through the <a href="%s" target="_blank">Add new</a> page on your WordPress installation.'), admin_url('admin.php?page=h5p_new')); ?></li>
-        <li><?php printf(__('Start creating your own interactive content through the <a href="%s" target="_blank">Add new</a> page.'), admin_url('admin.php?page=h5p_new')); ?></li>
+        <li><?php printf(wp_kses(__('Select and download the desired content types from <a href="%s" target="_blank">H5P.org</a>.', $this->plugin_slug), array('a' => array('href' => array(), 'target' => array()))), esc_url('http://h5p.org/content-types-and-applications')); ?></li>
+        <li><?php printf(wp_kses(__('Upload the content types through the <a href="%s" target="_blank">Add new</a> page on your WordPress installation.', $this->plugin_slug), array('a' => array('href' => array(), 'target' => array()))), admin_url('admin.php?page=h5p_new')); ?></li>
+        <li><?php printf(wp_kses(__('Start creating your own interactive content through the <a href="%s" target="_blank">Add new</a> page.', $this->plugin_slug), array('a' => array('href' => array(), 'target' => array()))), admin_url('admin.php?page=h5p_new')); ?></li>
       </ol>
-      <p><?php printf(__('If you need help getting started you can file a <a href="%s" target="_blank">support request</a>, check out our <a href="%s" target="_blank">forum</a> or join our IRC channel #H5P on Freenode.'), 'https://wordpress.org/support/plugin/h5p', 'http://h5p.org/forum'); ?></p>
+      <p><?php printf(wp_kses(__('If you need help getting started you can file a <a href="%s" target="_blank">support request</a>, check out our <a href="%s" target="_blank">forum</a> or join our IRC channel #H5P on Freenode.', $this->plugin_slug), array('a' => array('href' => array(), 'target' => array()))), esc_url('https://wordpress.org/support/plugin/h5p'), esc_url('http://h5p.org/forum')); ?></p>
     <?php
   }
 
@@ -260,7 +260,7 @@ class H5P_Plugin_Admin {
     // Process form data when upload H5Ps without content.
     add_action('load-' . $libraries_page, array($this->library, 'process_libraries'));
 
-    if (get_option('h5p_track_user', TRUE) === '1') {
+    if (get_option('h5p_track_user', TRUE)) {
       $my_results = __('My Results', $this->plugin_slug);
       add_submenu_page($this->plugin_slug, $my_results, $my_results, 'view_h5p_results', $this->plugin_slug . '_results', array($this, 'display_results_page'));
     }
@@ -277,28 +277,51 @@ class H5P_Plugin_Admin {
   public function display_settings_page() {
     $save = filter_input(INPUT_POST, 'save_these_settings');
     if ($save !== NULL) {
+      // Get input and store settings
       check_admin_referer('h5p_settings', 'save_these_settings'); // Verify form
 
-      $export = filter_input(INPUT_POST, 'h5p_export', FILTER_VALIDATE_BOOLEAN);
-      update_option('h5p_export', $export ? TRUE : FALSE);
+      // Action bar
+      $frame = filter_input(INPUT_POST, 'frame', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_frame', $frame);
 
-      $icon = filter_input(INPUT_POST, 'h5p_icon', FILTER_VALIDATE_BOOLEAN);
-      update_option('h5p_icon', $icon ? TRUE : FALSE);
+      $download = filter_input(INPUT_POST, 'download', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_export', $download);
 
-      $track_user = filter_input(INPUT_POST, 'h5p_track_user', FILTER_VALIDATE_BOOLEAN);
-      update_option('h5p_track_user', $track_user ? TRUE : FALSE);
+      $embed = filter_input(INPUT_POST, 'embed', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_embed', $embed);
+
+      $copyright = filter_input(INPUT_POST, 'copyright', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_copyright', $copyright);
+
+      $about = filter_input(INPUT_POST, 'about', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_icon', $about);
+
+      $track_user = filter_input(INPUT_POST, 'track_user', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_track_user', $track_user);
 
       $library_updates = filter_input(INPUT_POST, 'library_updates', FILTER_VALIDATE_BOOLEAN);
       update_option('h5p_library_updates', $track_user);
+
+      $save_content_state = filter_input(INPUT_POST, 'save_content_state', FILTER_VALIDATE_BOOLEAN);
+      update_option('h5p_save_content_state', $save_content_state);
+
+      $save_content_frequency = filter_input(INPUT_POST, 'save_content_frequency', FILTER_VALIDATE_INT);
+      update_option('h5p_save_content_frequency', $save_content_frequency);
     }
     else {
-      $export = get_option('h5p_export', TRUE);
-      $icon = get_option('h5p_icon', TRUE);
+      $frame = get_option('h5p_frame', TRUE);
+      $download = get_option('h5p_export', TRUE);
+      $embed = get_option('h5p_embed', TRUE);
+      $copyright = get_option('h5p_copyright', TRUE);
+      $about = get_option('h5p_icon', TRUE);
       $track_user = get_option('h5p_track_user', TRUE);
       $library_updates = get_option('h5p_library_updates', TRUE);
+      $save_content_state = get_option('h5p_save_content_state', FALSE);
+      $save_content_frequency = get_option('h5p_save_content_frequency', 30);
     }
 
     include_once('views/settings.php');
+    H5P_Plugin_Admin::add_script('disable', 'h5p-php-library/js/disable.js');
   }
 
   /**
@@ -780,4 +803,134 @@ class H5P_Plugin_Admin {
     );
 
   }
+
+  /**
+   * Handle user results reported by the H5P content.
+   *
+   * @since 1.5.0
+   */
+  public function ajax_contents_user_data() {
+    global $wpdb;
+
+    $content_id = filter_input(INPUT_GET, 'content_id');
+    $data_id = filter_input(INPUT_GET, 'data_type');
+    $sub_content_id = filter_input(INPUT_GET, 'sub_content_id');
+    $current_user = wp_get_current_user();
+
+    if ($content_id === NULL ||
+        $data_id === NULL ||
+        $sub_content_id === NULL ||
+        !$current_user->ID) {
+      return; // Missing parameters
+    }
+
+    $response = (object) array(
+      'success' => TRUE
+    );
+
+    $data = filter_input(INPUT_POST, 'data');
+    $preload = filter_input(INPUT_POST, 'preload');
+    $invalidate = filter_input(INPUT_POST, 'invalidate');
+    if ($data !== NULL && $preload !== NULL && $invalidate !== NULL) {
+      if ($data === '0') {
+        // Remove data
+        $wpdb->delete($wpdb->prefix . 'h5p_contents_user_data',
+          array(
+            'content_id' => $content_id,
+            'data_id' => $data_id,
+            'user_id' => $current_user->ID,
+            'sub_content_id' => $sub_content_id
+          ),
+          array('%d', '%s', '%d', '%d'));
+      }
+      else {
+        // Wash values to ensure 0 or 1.
+        $preload = ($preload === '0' ? 0 : 1);
+        $invalidate = ($invalidate === '0' ? 0 : 1);
+
+        // Determine if we should update or insert
+        $update = $wpdb->get_var($wpdb->prepare(
+          "SELECT content_id
+           FROM {$wpdb->prefix}h5p_contents_user_data
+           WHERE content_id = %d
+             AND user_id = %d
+             AND data_id = %s
+             AND sub_content_id = %d",
+            $content_id, $current_user->ID, $data_id, $sub_content_id
+        ));
+
+        if ($update === NULL) {
+          // Insert new data
+          $wpdb->insert($wpdb->prefix . 'h5p_contents_user_data',
+            array(
+              'user_id' => $current_user->ID,
+              'content_id' => $content_id,
+              'sub_content_id' => $sub_content_id,
+              'data_id' => $data_id,
+              'data' => $data,
+              'preload' => $preload,
+              'invalidate' => $invalidate,
+              'updated_at' => current_time('mysql', 1)
+            ),
+            array('%d', '%d', '%d', '%s', '%s', '%d', '%d', '%s')
+          );
+        }
+        else {
+          // Update old data
+          $wpdb->update($wpdb->prefix . 'h5p_contents_user_data',
+            array(
+              'data' => $data,
+              'preload' => $preload,
+              'invalidate' => $invalidate,
+              'updated_at' => current_time('mysql', 1)
+            ),
+            array(
+              'user_id' => $current_user->ID,
+              'content_id' => $content_id,
+              'data_id' => $data_id,
+              'sub_content_id' => $sub_content_id
+            ),
+            array('%s', '%d', '%d', '%s'),
+            array('%d', '%d', '%s', '%d')
+          );
+        }
+      }
+    }
+    else {
+      // Fetch data
+      $response->data = $wpdb->get_var($wpdb->prepare(
+        "SELECT hcud.data
+         FROM {$wpdb->prefix}h5p_contents_user_data hcud
+         WHERE user_id = %d
+           AND content_id = %d
+           AND data_id = %s
+           AND sub_content_id = %d",
+        $current_user->ID, $content_id, $data_id, $sub_content_id
+      ));
+
+      if ($response->data === NULL) {
+        unset($response->data);
+      }
+    }
+
+    header('Cache-Control: no-cache');
+    header('Content-type: application/json; charset=utf-8');
+    print json_encode($response);
+    exit;
+  }
+
+  /**
+   * Remove user data and results when user is removed.
+   *
+   * @since 1.5.0
+   */
+  public function deleted_user($id) {
+
+    // Remove user scores/results
+    $wpdb->delete($wpdb->prefix . 'h5p_results', array('user_id' => $id), array('%d'));
+
+    // Remove contents user/usage data
+    $wpdb->delete($wpdb->prefix . 'h5p_contents_user_data', array('user_id' => $id), array('%d'));
+  }
+
 }

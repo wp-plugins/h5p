@@ -69,6 +69,7 @@ function _h5p_uninstall() {
   // Drop tables
   $wpdb->query("DROP TABLE {$wpdb->prefix}h5p_contents");
   $wpdb->query("DROP TABLE {$wpdb->prefix}h5p_contents_libraries");
+  $wpdb->query("DROP TABLE {$wpdb->prefix}h5p_contents_user_data");
   $wpdb->query("DROP TABLE {$wpdb->prefix}h5p_results");
   $wpdb->query("DROP TABLE {$wpdb->prefix}h5p_libraries");
   $wpdb->query("DROP TABLE {$wpdb->prefix}h5p_libraries_libraries");
@@ -76,11 +77,16 @@ function _h5p_uninstall() {
 
   // Remove settings
   delete_option('h5p_version');
+  delete_option('h5p_frame');
   delete_option('h5p_export');
+  delete_option('h5p_embed');
+  delete_option('h5p_copyright');
   delete_option('h5p_icon');
-  delete_option('h5p_library_updates');
   delete_option('h5p_track_user');
   delete_option('h5p_minitutorial');
+  delete_option('h5p_library_updates');
+  delete_option('h5p_save_content_state');
+  delete_option('h5p_save_content_frequency');
 
   // Clean out file dirs.
   $upload_dir = wp_upload_dir();

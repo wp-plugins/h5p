@@ -24,7 +24,7 @@ class H5P_Plugin {
    * @since 1.0.0
    * @var string
    */
-  const VERSION = '1.4.1';
+  const VERSION = '1.5.0';
 
   /**
    * The Unique identifier for this plugin.
@@ -163,6 +163,7 @@ class H5P_Plugin {
       parameters LONGTEXT NOT NULL,
       filtered LONGTEXT NOT NULL,
       embed_type VARCHAR(127) NOT NULL,
+      disable INT UNSIGNED NOT NULL DEFAULT 0,
       content_type VARCHAR(127) NULL,
       author VARCHAR(127) NULL,
       license VARCHAR(7) NULL,
@@ -179,6 +180,19 @@ class H5P_Plugin {
       weight SMALLINT UNSIGNED NOT NULL DEFAULT 0,
       drop_css TINYINT UNSIGNED NOT NULL,
       PRIMARY KEY  (content_id,library_id,dependency_type)
+    ) {$charset};");
+
+    // Keep track of data/state when users use content (contents >-< users)
+    dbDelta("CREATE TABLE {$wpdb->prefix}h5p_contents_user_data (
+      content_id INT UNSIGNED NOT NULL,
+      user_id INT UNSIGNED NOT NULL,
+      sub_content_id INT UNSIGNED NOT NULL,
+      data_id VARCHAR(127) NOT NULL,
+      data LONGTEXT NOT NULL,
+      preload TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      invalidate TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP NOT NULL DEFAULT 0,
+      PRIMARY KEY  (content_id,user_id,sub_content_id,data_id)
     ) {$charset};");
 
     // Keep track of results (contents >-< users)
@@ -236,11 +250,16 @@ class H5P_Plugin {
     ) {$charset};");
 
     // Add default setting options
+    add_option('h5p_frame', TRUE);
     add_option('h5p_export', TRUE);
+    add_option('h5p_embed', TRUE);
+    add_option('h5p_copyright', TRUE);
     add_option('h5p_icon', TRUE);
     add_option('h5p_track_user', TRUE);
     add_option('h5p_library_updates', TRUE);
     add_option('h5p_minitutorial', FALSE);
+    add_option('h5p_save_content_state', FALSE);
+    add_option('h5p_save_content_frequency', 30);
   }
 
   /**
@@ -448,11 +467,23 @@ class H5P_Plugin {
    * Get the URL for the H5P files folder.
    *
    * @since 1.0.0
+   * @param $absolute Optional.
    * @return string
    */
-  public function get_h5p_url() {
-    $upload_dir = wp_upload_dir();
-    return $upload_dir['baseurl'] . '/h5p';
+  public function get_h5p_url($absolute = FALSE) {
+    static $url;
+
+    if (!$url) {
+      $upload_dir = wp_upload_dir();
+
+      // Absolute urls are used to enqueue assets.
+      $url = array('abs' => $upload_dir['baseurl'] . '/h5p');
+
+      // Relative URLs are used to support both http and https in iframes.
+      $url['rel'] = '/' . preg_replace('/^[^:]+:\/\/[^\/]+\//', '', $url['abs']);
+    }
+
+    return $absolute ? $url['abs'] : $url['rel'];
   }
 
   /**
@@ -495,7 +526,7 @@ class H5P_Plugin {
 
       $language = $this->get_language();
 
-      self::$core = new H5PCore(self::$interface, $this->get_h5p_url(), $language, get_option('h5p_export', TRUE));
+      self::$core = new H5PCore(self::$interface, $this->get_h5p_path(), $this->get_h5p_url(), $language, get_option('h5p_export', TRUE));
     }
 
     switch ($type) {
@@ -558,6 +589,57 @@ class H5P_Plugin {
   }
 
   /**
+   * Get settings for given content
+   *
+   * @since 1.5.0
+   * @param array $content
+   * @return array
+   */
+  public function get_content_settings($content) {
+    global $wpdb;
+    $core = $this->get_h5p_instance('core');
+
+    // Add global disable settings
+    $content['disable'] |= $core->getGlobalDisable();
+
+    // Add JavaScript settings for this content
+    $settings = array(
+      'library' => H5PCore::libraryToString($content['library']),
+      'jsonContent' => $core->filterParameters($content),
+      'fullScreen' => $content['library']['fullscreen'],
+      'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : '',
+      'embedCode' => '<iframe src="' . admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id']) . '" width=":w" height=":h" frameborder="0" allowfullscreen="allowfullscreen"></iframe>',
+      'resizeCode' => '<script src="' . plugins_url('h5p/h5p-php-library/js/h5p-resizer.js') . '"></script>',
+      'url' => admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id']),
+      'disable' => $content['disable']
+    );
+
+    // Get preloaded user data for the current user
+    $current_user = wp_get_current_user();
+    if (get_option('h5p_save_content_state', FALSE) && $current_user->ID) {
+      $results = $wpdb->get_results($wpdb->prepare(
+        "SELECT hcud.sub_content_id,
+                hcud.data_id,
+                hcud.data
+          FROM {$wpdb->prefix}h5p_contents_user_data hcud
+          WHERE user_id = %d
+          AND content_id = %d
+          AND preload = 1",
+        $current_user->ID, $content['id']
+      ));
+
+      if ($results) {
+        $settings['contentUserData'] = array();
+        foreach ($results as $result) {
+          $settings['contentUserData'][$result->sub_content_id][$result->data_id] = $result->data;
+        }
+      }
+    }
+
+    return $settings;
+  }
+
+  /**
    * Include settings and assets for the given content.
    *
    * @since 1.0.0
@@ -575,18 +657,8 @@ class H5P_Plugin {
     // Make sure content isn't added twice
     $cid = 'cid-' . $content['id'];
     if (!isset(self::$settings['contents'][$cid])) {
+      self::$settings['contents'][$cid] = $this->get_content_settings($content);
       $core = $this->get_h5p_instance('core');
-
-      // Add JavaScript settings for this content
-      self::$settings['contents'][$cid] = array(
-        'library' => H5PCore::libraryToString($content['library']),
-        'jsonContent' => $core->filterParameters($content),
-        'fullScreen' => $content['library']['fullscreen'],
-        'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : '',
-        'embedCode' => '<iframe src="' . admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id']) . '" width=":w" height=":h" frameborder="0" allowfullscreen="allowfullscreen"></iframe>',
-        'resizeCode' => '<script src="' . plugins_url('h5p/h5p-php-library/js/h5p-resizer.js') . '"></script>',
-        'url' => admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id'])
-      );
 
       // Get assets for this content
       $preloaded_dependencies = $core->loadContentDependencies($content['id'], 'preloaded');
@@ -615,19 +687,20 @@ class H5P_Plugin {
    * @param array $assets
    */
   public function enqueue_assets(&$assets) {
-    $cut = $this->get_h5p_url() . '/libraries/';
+    $abs_url = $this->get_h5p_url(TRUE);
+    $rel_url = $this->get_h5p_url();
     foreach ($assets['scripts'] as $script) {
-      $url = $script->path . $script->version;
+      $url = $rel_url . $script->path . $script->version;
       if (!in_array($url, self::$settings['loadedJs'])) {
         self::$settings['loadedJs'][] = $url;
-        wp_enqueue_script($this->asset_handle(str_replace($cut, '', $script->path)), $script->path, array(), str_replace('?ver', '', $script->version));
+        wp_enqueue_script($this->asset_handle(trim($script->path, '/')), $abs_url . $script->path, array(), str_replace('?ver', '', $script->version));
       }
     }
     foreach ($assets['styles'] as $style) {
-      $url = $style->path . $style->version;
+      $url = $rel_url . $style->path . $style->version;
       if (!in_array($url, self::$settings['loadedCss'])) {
         self::$settings['loadedCss'][] = $url;
-        wp_enqueue_style($this->asset_handle(str_replace($cut, '', $style->path)), $style->path, array(), str_replace('?ver', '', $style->version));
+        wp_enqueue_style($this->asset_handle(trim($style->path, '/')), $abs_url . $style->path, array(), str_replace('?ver', '', $style->version));
       }
     }
   }
@@ -640,7 +713,7 @@ class H5P_Plugin {
    * @return string
    */
   public function asset_handle($path) {
-    return $this->plugin_slug . '-' . preg_replace(array('/\.[^.]*$/', '/[^a-z0-9]/i'), array('', '-'), $path);
+    return $this->plugin_slug . '-' . preg_replace(array('/\.[^.]*$/', '/[^a-z0-9]/i'), array('', '-'), strtolower($path));
   }
 
   /**
@@ -652,10 +725,14 @@ class H5P_Plugin {
     $current_user = wp_get_current_user();
 
     return array(
-      'basePath' => '/',
+      'baseUrl' => get_site_url(),
       'url' => $this->get_h5p_url(),
-      'postUserStatistics' => (get_option('h5p_track_user', TRUE) === '1'),
+      'postUserStatistics' => (get_option('h5p_track_user', TRUE) === '1') && $current_user->ID,
       'ajaxPath' => admin_url('admin-ajax.php?action=h5p_'),
+      'ajax' => array(
+        'contentUserData' => admin_url('admin-ajax.php?action=h5p_contents_user_data&content_id=:contentId&data_type=:dataType&sub_content_id=:subContentId')
+      ),
+      'saveFreq' => get_option('h5p_save_content_state', FALSE) ? get_option('h5p_save_content_frequency', 30) : FALSE,
       'user' => array(
         'name' => $current_user->display_name,
         'mail' => $current_user->user_email
@@ -683,7 +760,9 @@ class H5P_Plugin {
           'downloadDescription' => __('Download this content as a H5P file.', $this->plugin_slug),
           'copyrightsDescription' => __('View copyright information for this content.', $this->plugin_slug),
           'embedDescription' => __('View the embed code for this content.', $this->plugin_slug),
-          'h5pDescription' => __('Visit H5P.org to check out more cool content.', $this->plugin_slug)
+          'h5pDescription' => __('Visit H5P.org to check out more cool content.', $this->plugin_slug),
+          'contentChanged' => __('This content has changed since you last used it.', $this->plugin_slug),
+          'startingOver' => __("You'll be starting over.", $this->plugin_slug)
         )
       )
     );
@@ -708,18 +787,20 @@ class H5P_Plugin {
     self::$settings['loadedCss'] = array();
     $cache_buster = '?ver=' . self::VERSION;
 
+    // Use relative URL to support both http and https.
+    $lib_url = plugins_url('h5p/h5p-php-library') . '/';
+    $rel_path = '/' . preg_replace('/^[^:]+:\/\/[^\/]+\//', '', $lib_url);
+
     // Add core stylesheets
     foreach (H5PCore::$styles as $style) {
-      $style_url = plugins_url('h5p/h5p-php-library/' . $style);
-      self::$settings['core']['styles'][] = $style_url . $cache_buster;
-      wp_enqueue_style($this->asset_handle('core-' . $style), $style_url, array(), self::VERSION);
+      self::$settings['core']['styles'][] = $rel_path . $style . $cache_buster;
+      wp_enqueue_style($this->asset_handle('core-' . $style), $lib_url . $style, array(), self::VERSION);
     }
 
     // Add core JavaScript
     foreach (H5PCore::$scripts as $script) {
-      $script_url = plugins_url('h5p/h5p-php-library/' . $script);
-      self::$settings['core']['scripts'][] = $script_url . $cache_buster;
-      wp_enqueue_script($this->asset_handle('core-' . $script), $script_url, array(), self::VERSION);
+      self::$settings['core']['scripts'][] = $rel_path . $script . $cache_buster;
+      wp_enqueue_script($this->asset_handle('core-' . $script), $lib_url . $script, array(), self::VERSION);
     }
   }
 

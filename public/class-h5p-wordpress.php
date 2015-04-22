@@ -62,9 +62,9 @@ class H5PWordPress implements H5PFrameworkInterface {
   }
 
   /**
-   * Implements getH5PPath
+   * Helper
    */
-  public function getH5pPath() {
+  private function getH5pPath() {
     $plugin = H5P_Plugin::get_instance();
     return $plugin->get_h5p_path();
   }
@@ -385,7 +385,8 @@ class H5PWordPress implements H5PFrameworkInterface {
       'parameters' => $content['params'],
       'embed_type' => 'div', // TODO: Determine from library?
       'library_id' => $content['library']['libraryId'],
-      'filtered' => ''
+      'filtered' => '',
+      'disable' => $content['disable'],
     );
     $format = array(
       '%s',
@@ -393,7 +394,8 @@ class H5PWordPress implements H5PFrameworkInterface {
       '%s',
       '%s',
       '%d',
-      '%s'
+      '%s',
+      '%d'
     );
 
     if (!isset($content['id'])) {
@@ -452,8 +454,15 @@ class H5PWordPress implements H5PFrameworkInterface {
   public function deleteContentData($id) {
     global $wpdb;
 
+    // Remove content data and library usage
     $wpdb->delete($wpdb->prefix . 'h5p_contents', array('id' => $id), array('%d'));
     $this->deleteLibraryUsage($id);
+
+    // Remove user scores/results
+    $wpdb->delete($wpdb->prefix . 'h5p_results', array('content_id' => $id), array('%d'));
+
+    // Remove contents user/usage data
+    $wpdb->delete($wpdb->prefix . 'h5p_contents_user_data', array('content_id' => $id), array('%d'));
   }
 
   /**
@@ -595,6 +604,7 @@ class H5PWordPress implements H5PFrameworkInterface {
               , hc.filtered
               , hc.user_id
               , hc.embed_type AS embedType
+              , hc.disable
               , hl.id AS libraryId
               , hl.name AS libraryName
               , hl.major_version AS libraryMajorVersion
@@ -645,6 +655,9 @@ class H5PWordPress implements H5PFrameworkInterface {
    * Implements getOption().
    */
   public function getOption($name, $default = FALSE) {
+    if ($name === 'site_uuid') {
+      $name = 'h5p_site_uuid'; // Make up for old core bug
+    }
     return get_option('h5p_' . $name, $default);
   }
 
@@ -653,6 +666,9 @@ class H5PWordPress implements H5PFrameworkInterface {
    * Implements setOption().
    */
   public function setOption($name, $value) {
+    if ($name === 'site_uuid') {
+      $name = 'h5p_site_uuid'; // Make up for old core bug
+    }
     $name = 'h5p_' . $name; // Always prefix to avoid conflicts
     $var = $this->getOption($name);
     if ($var === FALSE) {
@@ -787,6 +803,28 @@ class H5PWordPress implements H5PFrameworkInterface {
       array('name' => $library_name),
       array('%s'),
       array('%s')
+    );
+  }
+
+  /**
+   * Implements resetContentUserData
+   */
+  public function resetContentUserData($contentId) {
+    global $wpdb;
+
+    // Reset user datas for this content
+    $wpdb->update(
+      $wpdb->prefix . 'h5p_contents_user_data',
+      array(
+        'updated_at' => current_time('mysql', 1),
+        'data' => 'RESET'
+      ),
+      array(
+        'content_id' => $contentId,
+        'invalidate' => 1
+      ),
+      array('%s', '%s'),
+      array('%d', '%d')
     );
   }
 
