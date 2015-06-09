@@ -1642,7 +1642,6 @@ class H5PCore {
   const DISABLE_EMBED = 4;
   const DISABLE_COPYRIGHT = 8;
   const DISABLE_ABOUT = 16;
-  const DISABLE_ALL = 31;
 
   // Map flags to string
   public static $disable = array(
@@ -2352,26 +2351,21 @@ class H5PCore {
    * Determine disable state from sources.
    *
    * @param array $sources
+   * @param int $current
    * @return int
    */
-  public static function getDisable(&$sources) {
-    $disable = H5PCore::DISABLE_NONE;
-    if (!isset($sources['frame']) || !$sources['frame']) {
-      $disable |= H5PCore::DISABLE_FRAME;
+  public function getDisable(&$sources, $current) {
+    foreach (H5PCore::$disable as $bit => $option) {
+      if ($this->h5pF->getOption(($bit & H5PCore::DISABLE_DOWNLOAD ? 'export' : $option), TRUE)) {
+        if (!isset($sources[$option]) || !$sources[$option]) {
+          $current |= $bit; // Disable
+        }
+        else {
+          $current &= ~$bit; // Enable
+        }
+      }
     }
-    if (!isset($sources['download']) || !$sources['download']) {
-      $disable |= H5PCore::DISABLE_DOWNLOAD;
-    }
-    if (!isset($sources['copyright']) || !$sources['copyright']) {
-      $disable |= H5PCore::DISABLE_COPYRIGHT;
-    }
-    if (!isset($sources['embed']) || !$sources['embed']) {
-      $disable |= H5PCore::DISABLE_EMBED;
-    }
-    if (!isset($sources['about']) || !$sources['about']) {
-      $disable |= H5PCore::DISABLE_ABOUT;
-    }
-    return $disable;
+    return $current;
   }
 
   // Cache for getting library ids
@@ -2811,6 +2805,10 @@ class H5PContentValidator {
       }
     }
     if (!(isset($semantics->optional) && $semantics->optional)) {
+      if ($group === NULL) {
+        // Error no value. Errors aren't printed...
+        return;
+      }
       foreach ($semantics->fields as $field) {
         if (!(isset($field->optional) && $field->optional)) {
           // Check if field is in group.
