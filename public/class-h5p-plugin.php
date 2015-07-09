@@ -24,7 +24,7 @@ class H5P_Plugin {
    * @since 1.0.0
    * @var string
    */
-  const VERSION = '1.5.2';
+  const VERSION = '1.5.3';
 
   /**
    * The Unique identifier for this plugin.
@@ -162,6 +162,7 @@ class H5P_Plugin {
       library_id INT UNSIGNED NOT NULL,
       parameters LONGTEXT NOT NULL,
       filtered LONGTEXT NOT NULL,
+      slug VARCHAR(127) NOT NULL,
       embed_type VARCHAR(127) NOT NULL,
       disable INT UNSIGNED NOT NULL DEFAULT 0,
       content_type VARCHAR(127) NULL,
@@ -375,9 +376,14 @@ class H5P_Plugin {
     global $wpdb;
     $wpdb->hide_errors();
 
-    $wpdb->query("ALTER TABLE `{$wpdb->prefix}{$table}` DROP INDEX `{$index}`");
+    if ($wpdb->query("SHOW INDEX FROM `{$wpdb->prefix}{$table}` WHERE Key_name = '{$index}'")) {
+      $wpdb->query("ALTER TABLE `{$wpdb->prefix}{$table}` DROP INDEX `{$index}`");
+    }
+
     for ($i = 0; $i < 5; $i++) {
-      $wpdb->query("ALTER TABLE `{$wpdb->prefix}{$table}` DROP INDEX `{$index}_$i`");
+      if ($wpdb->query("SHOW INDEX FROM `{$wpdb->prefix}{$table}` WHERE Key_name = '{$index}_$i'")) {
+        $wpdb->query("ALTER TABLE `{$wpdb->prefix}{$table}` DROP INDEX `{$index}_$i`");
+      }
     }
 
     $wpdb->show_errors();
@@ -602,16 +608,43 @@ class H5P_Plugin {
     // Add global disable settings
     $content['disable'] |= $core->getGlobalDisable();
 
+    $safe_parameters = $core->filterParameters($content);
+    if (has_action('h5p_alter_filtered_parameters')) {
+      // Parse the JSON parameters
+      $decoded_parameters = json_decode($safe_parameters);
+
+      /**
+       * Allows you to alter the H5P content parameters after they have been
+       * filtered. This hook only fires before view.
+       *
+       * @since 1.5.3
+       *
+       * @param object &$parameters
+       * @param string $libraryName
+       * @param int $libraryMajorVersion
+       * @param int $libraryMinorVersion
+       */
+      do_action_ref_array('h5p_alter_filtered_parameters', array(&$decoded_parameters, $content['library']['name'], $content['library']['majorVersion'], $content['library']['minorVersion']));
+
+      // Stringify the JSON parameters
+      $safe_parameters = json_encode($decoded_parameters);
+    }
+
     // Add JavaScript settings for this content
     $settings = array(
       'library' => H5PCore::libraryToString($content['library']),
-      'jsonContent' => $core->filterParameters($content),
+      'jsonContent' => $safe_parameters,
       'fullScreen' => $content['library']['fullscreen'],
-      'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . $content['id'] . '.h5p' : '',
+      'exportUrl' => get_option('h5p_export', TRUE) ? $this->get_h5p_url() . '/exports/' . ($content['slug'] ? $content['slug'] . '-' : '') . $content['id'] . '.h5p' : '',
       'embedCode' => '<iframe src="' . admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id']) . '" width=":w" height=":h" frameborder="0" allowfullscreen="allowfullscreen"></iframe>',
       'resizeCode' => '<script src="' . plugins_url('h5p/h5p-php-library/js/h5p-resizer.js') . '"></script>',
       'url' => admin_url('admin-ajax.php?action=h5p_embed&id=' . $content['id']),
-      'disable' => $content['disable']
+      'disable' => $content['disable'],
+      'contentUserData' => array(
+        0 => array(
+          'state' => '{}'
+        )
+      )
     );
 
     // Get preloaded user data for the current user
@@ -629,7 +662,6 @@ class H5P_Plugin {
       ));
 
       if ($results) {
-        $settings['contentUserData'] = array();
         foreach ($results as $result) {
           $settings['contentUserData'][$result->sub_content_id][$result->data_id] = $result->data;
         }
@@ -663,6 +695,7 @@ class H5P_Plugin {
       // Get assets for this content
       $preloaded_dependencies = $core->loadContentDependencies($content['id'], 'preloaded');
       $files = $core->getDependenciesFiles($preloaded_dependencies);
+      $this->alter_assets($files, $preloaded_dependencies, $embed);
 
       if ($embed === 'div') {
         $this->enqueue_assets($files);
@@ -679,6 +712,54 @@ class H5P_Plugin {
     else {
       return '<div class="h5p-iframe-wrapper"><iframe id="h5p-iframe-' . $content['id'] . '" class="h5p-iframe" data-content-id="' . $content['id'] . '" style="height:1px" src="about:blank" frameBorder="0" scrolling="no"></iframe></div>';
     }
+  }
+
+  /**
+   * Finds the assets for the dependencies and allows other plugins to change
+   * them and add their own.
+   *
+   * @since 1.5.3
+   * @param array $dependencies
+   * @param array $files scripts & styles
+   * @param string $embed type
+   */
+  public function alter_assets(&$files, &$dependencies, $embed) {
+    if (!has_action('h5p_alter_library_scripts') && !has_action('h5p_alter_library_styles')) {
+      return;
+    }
+
+    // Refactor dependency list
+    $libraries = array();
+    foreach ($dependencies as $dependency) {
+      $libraries[$dependency['machineName']] = array(
+        'majorVersion' => $dependency['majorVersion'],
+        'minorVersion' => $dependency['minorVersion']
+      );
+    }
+
+    /**
+      * Allows you to alter which JavaScripts are loaded for H5P. This is
+      * useful for adding your own custom scripts or replacing existing once.
+     *
+     * @since 1.5.3
+     *
+     * @param array &$scripts List of JavaScripts to be included.
+     * @param array $libraries The list of libraries that has the scripts.
+     * @param string $embed_type Possible values are: div, iframe, external, editor.
+     */
+    do_action_ref_array('h5p_alter_library_scripts', array(&$files['scripts'], $libraries, $embed));
+
+    /**
+     * Allows you to alter which stylesheets are loaded for H5P. This is
+     * useful for adding your own custom stylesheets or replacing existing once.
+     *
+     * @since 1.5.3
+     *
+     * @param array &$styles List of stylesheets to be included.
+     * @param array $libraries The list of libraries that has the styles.
+     * @param string $embed_type Possible values are: div, iframe, external, editor.
+     */
+    do_action_ref_array('h5p_alter_library_styles', array(&$files['styles'], $libraries, $embed));
   }
 
   /**
@@ -724,7 +805,7 @@ class H5P_Plugin {
   public function get_core_settings() {
     $current_user = wp_get_current_user();
 
-    return array(
+    $settings = array(
       'baseUrl' => get_site_url(),
       'url' => $this->get_h5p_url(),
       'postUserStatistics' => (get_option('h5p_track_user', TRUE) === '1') && $current_user->ID,
@@ -733,10 +814,7 @@ class H5P_Plugin {
         'contentUserData' => admin_url('admin-ajax.php?action=h5p_contents_user_data&content_id=:contentId&data_type=:dataType&sub_content_id=:subContentId')
       ),
       'saveFreq' => get_option('h5p_save_content_state', FALSE) ? get_option('h5p_save_content_frequency', 30) : FALSE,
-      'user' => array(
-        'name' => $current_user->display_name,
-        'mail' => $current_user->user_email
-      ),
+      'siteUrl' => get_site_url(),
       'l10n' => array(
         'H5P' => array(
           'fullscreen' => __('Fullscreen', $this->plugin_slug),
@@ -766,6 +844,15 @@ class H5P_Plugin {
         )
       )
     );
+
+    if ($current_user->ID) {
+      $settings['user'] = array(
+        'name' => $current_user->display_name,
+        'mail' => $current_user->user_email
+      );
+    }
+
+    return $settings;
   }
 
   /**

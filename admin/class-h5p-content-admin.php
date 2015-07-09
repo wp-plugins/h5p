@@ -275,7 +275,7 @@ class H5PContentAdmin {
         if (wp_verify_nonce($delete, 'deleting_h5p_content')) {
           $core = $plugin->get_h5p_instance('core');
           $core->h5pF->deleteContentData($this->content['id']);
-          $this->delete_export($this->content['id']);
+          $this->delete_export($this->content);
           wp_safe_redirect(admin_url('admin.php?page=h5p'));
           return;
         }
@@ -306,7 +306,8 @@ class H5PContentAdmin {
       }
 
       if ($result) {
-        $this->delete_export($result);
+        $content['id'] = $result;
+        $this->delete_export($content);
         wp_safe_redirect(admin_url('admin.php?page=h5p&task=show&id=' . $result));
       }
     }
@@ -327,7 +328,15 @@ class H5PContentAdmin {
     $title = $this->get_input('title', $contentExists ? $this->content['title'] : '');
     $library = $this->get_input('library', $contentExists ? H5PCore::libraryToString($this->content['library']) : 0);
     $parameters = $this->get_input('parameters', $contentExists ? $core->filterParameters($this->content) : '{}');
-    $upload = (filter_input(INPUT_POST, 'action') === 'upload');
+
+    // Determine upload or create
+    if (!$contentExists && !$this->has_libraries()) {
+      $upload = TRUE;
+    }
+    else {
+      $upload = (filter_input(INPUT_POST, 'action') === 'upload');
+    }
+
 
     // Filter/escape parameters, double escape that is...
     $safe_text = wp_check_invalid_utf8($parameters);
@@ -340,16 +349,31 @@ class H5PContentAdmin {
   }
 
   /**
+   * Check to see if the installation has any libraries.
+   *
+   * @since 1.5.2
+   * @global \wpdb $wpdb
+   * @return bool
+   */
+  private function has_libraries() {
+    global $wpdb;
+
+    return $wpdb->get_var("SELECT id FROM {$wpdb->prefix}h5p_libraries WHERE runnable = 1 LIMIT 1") !== NULL;
+  }
+
+  /**
    * Remove h5p export file.
-   * TODO: Perhaps this should be handled by core?
    *
    * @since 1.1.0
-   * @param int $content_id
+   * @param array $content
    */
-  private function delete_export($content_id) {
+  private function delete_export($content) {
     $plugin = H5P_Plugin::get_instance();
     $export = $plugin->get_h5p_instance('export');
-    $export->deleteExport($content_id);
+    if (!isset($content['slug'])) {
+      $content['slug'] = '';
+    }
+    $export->deleteExport($content);
   }
 
   /**
@@ -570,57 +594,22 @@ class H5PContentAdmin {
     list($offset, $limit, $sort_by, $sort_dir, $filters) = $admin->get_data_view_input();
 
     // Add filters to data query
-    $where = '';
-    $query_args = array();
+    $conditions = array();
     if (isset($filters[0])) {
-      $where = "WHERE hc.title LIKE '%%%s%%'";
-      $query_args[] = $filters[0];
+      $conditions[] = array('title', $filters[0], 'LIKE');
     }
 
-    // Map order by field num to field name.
-    $orderFields = array(
-      (object) array(
-        'name' => 'hc.title',
-        'reverse' => TRUE
-      ),
-      (object) array(
-        'name' => 'hl.title',
-        'reverse' => TRUE
-      )
-    );
-    if (!$insert) {
-      $orderFields[] = 'hc.created_at';
+    // Different fields for insert
+    if ($insert) {
+      $fields = array('id', 'title', 'content_type', 'updated_at');
     }
-    $orderFields[] = 'hc.updated_at';
-    if (!$insert) {
-      $orderFields[] = (object) array(
-        'name' => 'u.display_name',
-        'reverse' => TRUE
-      );
+    else {
+      $fields = array('id', 'title', 'content_type', 'created_at', 'updated_at', 'user_name', 'user_id');
     }
 
-    // Order results by the select column and direction
-    $order = $admin->get_order_by($sort_by, $sort_dir, $orderFields);
-
-    // Get contents from database
-    $results = $wpdb->get_results($wpdb->prepare(
-      "SELECT hc.id,
-              hc.title,
-              hl.title AS content_type,
-              hc.created_at,
-              hc.updated_at,
-              u.ID AS user_id,
-              u.display_name AS user_name
-        FROM {$wpdb->prefix}h5p_contents hc
-        LEFT JOIN {$wpdb->prefix}h5p_libraries hl
-        ON hl.id = hc.library_id
-        LEFT JOIN {$wpdb->base_prefix}users u
-        ON hc.user_id = u.ID
-        {$where}
-        {$order}
-        LIMIT %d, %d",
-      array_merge($query_args, array($offset, $limit))
-    ));
+    // Create new content query
+    $content_query = new H5PContentQuery($fields, $offset, $limit, $fields[$sort_by + 1], $sort_dir, $conditions);
+    $results = $content_query->get_rows();
 
     // Make data more readable for humans
     $rows = array();
@@ -628,21 +617,11 @@ class H5PContentAdmin {
       $rows[] = ($insert ? $this->get_contents_insert_row($result) : $this->get_contents_row($result));
     }
 
-    // Find total number of contents
-    $num_query = "SELECT COUNT(hc.id)
-                  FROM {$wpdb->prefix}h5p_contents hc
-                  {$where}";
-
-    if (count($query_args)) {
-      $num_query = $wpdb->prepare($num_query, $query_args);
-    }
-    $num = (int) $wpdb->get_var($num_query);
-
     // Print results
     header('Cache-Control: no-cache');
     header('Content-type: application/json');
     print json_encode(array(
-      'num' => $num,
+      'num' => $content_query->get_total(),
       'rows' => $rows
     ));
     exit;
@@ -800,7 +779,8 @@ class H5PContentAdmin {
       'ajaxPath' => admin_url('admin-ajax.php?action=h5p_'),
       'libraryUrl' => plugin_dir_url('h5p/h5p-editor-php-library/h5peditor.class.php'),
       'copyrightSemantics' => H5PContentValidator::getCopyrightSemantics(),
-      'assets' => $assets
+      'assets' => $assets,
+      'deleteMessage' => __('Are you sure you wish to delete this content?', $this->plugin_slug)
     );
 
     if ($id !== NULL) {

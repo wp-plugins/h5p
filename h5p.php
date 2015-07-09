@@ -15,7 +15,7 @@
  * Plugin Name:       H5P
  * Plugin URI:        http://h5p.org/wordpress
  * Description:       Allows you to upload, create, share and use rich interactive content on your WordPress site.
- * Version:           1.5.2
+ * Version:           1.5.3
  * Author:            Joubel
  * Author URI:        http://joubel.com
  * Text Domain:       h5p
@@ -40,6 +40,7 @@ add_action('plugins_loaded', array('H5P_Plugin', 'get_instance'));
 if (is_admin()) {
   require_once(plugin_dir_path( __FILE__ ) . 'admin/class-h5p-plugin-admin.php');
   require_once(plugin_dir_path( __FILE__ ) . 'admin/class-h5p-content-admin.php');
+  require_once(plugin_dir_path( __FILE__ ) . 'admin/class-h5p-content-query.php');
   require_once(plugin_dir_path( __FILE__ ) . 'admin/class-h5p-library-admin.php');
   add_action('plugins_loaded', array('H5P_Plugin_Admin', 'get_instance'));
 }
